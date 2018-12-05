@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -902,8 +903,8 @@ func TestParse_DataDogTags(t *testing.T) {
 	}
 
 	sourceTags := map[string]map[string]string{
-		"my_gauge":   tagsForItem(s.gauges),
 		"my_counter": tagsForItem(s.counters),
+		"my_gauge":   tagsForItem(s.gauges),
 		"my_set":     tagsForItem(s.sets),
 		"my_timer":   tagsForItem(s.timings),
 	}
@@ -938,6 +939,102 @@ func tagsForItem(m interface{}) map[string]string {
 		}
 	}
 	return nil
+}
+
+// Test that Librato tags are parsed
+func TestParse_LibratoTags(t *testing.T) {
+	testGroups := [][]struct {
+		name     string
+		tagsFn   func(s *Statsd) map[string]string
+		wantTags map[string]string
+	}{
+		// Tagged
+		{
+			{
+				"my_counter#tag1=val_counter_1,tag2=val_counter_2:3|c",
+				func(s *Statsd) map[string]string { return tagsForItem(s.counters) },
+				map[string]string{
+					"metric_type": "counter",
+					"tag1":        "val_counter_1",
+					"tag2":        "val_counter_2",
+				},
+			},
+			{
+				"my_gauge#tag1=val_gauge_1,tag2=val_gauge_2:3|g",
+				func(s *Statsd) map[string]string { return tagsForItem(s.gauges) },
+				map[string]string{
+					"metric_type": "gauge",
+					"tag1":        "val_gauge_1",
+					"tag2":        "val_gauge_2",
+				},
+			},
+			{
+				"my_set#tag1=val_set_1,tag2=val_set_2:3|s",
+				func(s *Statsd) map[string]string { return tagsForItem(s.sets) },
+				map[string]string{
+					"metric_type": "set",
+					"tag1":        "val_set_1",
+					"tag2":        "val_set_2",
+				},
+			},
+			{
+				"my_timer#tag1=val_timer_1,tag2=val_timer_2:3|ms",
+				func(s *Statsd) map[string]string { return tagsForItem(s.timings) },
+				map[string]string{
+					"metric_type": "timing",
+					"tag1":        "val_timer_1",
+					"tag2":        "val_timer_2",
+				},
+			},
+		},
+
+		// Untagged
+		{
+			{
+				"my_counter_untagged:3|c",
+				func(s *Statsd) map[string]string { return tagsForItem(s.counters) },
+				map[string]string{
+					"metric_type": "counter",
+				},
+			},
+			{
+				"my_gauge_untagged:3|g",
+				func(s *Statsd) map[string]string { return tagsForItem(s.gauges) },
+				map[string]string{
+					"metric_type": "gauge",
+				},
+			},
+			{
+				"my_set_untagged:3|s",
+				func(s *Statsd) map[string]string { return tagsForItem(s.sets) },
+				map[string]string{
+					"metric_type": "set",
+				},
+			},
+			{
+				"my_timer_untagged:3|ms",
+				func(s *Statsd) map[string]string { return tagsForItem(s.timings) },
+				map[string]string{
+					"metric_type": "timing",
+				},
+			},
+		},
+	}
+
+	for _, tests := range testGroups {
+		s := NewTestStatsd()
+		s.ParseLibratoTags = true
+
+		for _, tc := range tests {
+			err := s.parseStatsdLine(tc.name)
+			if err != nil {
+				t.Errorf("Parsing line %s should not have resulted in an error\n", tc.name)
+			}
+
+			gotTags := tc.tagsFn(s)
+			assert.True(t, reflect.DeepEqual(gotTags, tc.wantTags), "Tags = %+v, expected: %+v", gotTags, tc.wantTags)
+		}
+	}
 }
 
 // Test that statsd buckets are parsed to measurement names properly

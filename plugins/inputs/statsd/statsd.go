@@ -69,6 +69,9 @@ type Statsd struct {
 	// This flag enables parsing of tags in the dogstatsd extension to the
 	// statsd protocol (http://docs.datadoghq.com/guides/dogstatsd/)
 	ParseDataDogTags bool
+	// This flag enables parsing of tags in the librato extension to the
+	// statsd protocol (https://www.librato.com/docs/kb/collect/collection_agents/stastd/#stat-level-tags)
+	ParseLibratoTags bool
 
 	// UDPPacketSize is deprecated, it's only here for legacy support
 	// we now always create 1 max size buffer and then copy only what we need
@@ -214,6 +217,11 @@ const sampleConfig = `
   ## Parses tags in the datadog statsd format
   ## http://docs.datadoghq.com/guides/dogstatsd/
   parse_data_dog_tags = false
+
+  ## Parses tags in the librato statsd format
+  ## Note this setting won't take effect if parse_data_dog_tags is set to true 
+  ## https://www.librato.com/docs/kb/collect/collection_agents/stastd/#stat-level-tags
+  parse_librato_tags = false
 
   ## Statsd data translation templates, more info can be read here:
   ## https://github.com/influxdata/telegraf/blob/master/docs/TEMPLATE_PATTERN.md
@@ -473,7 +481,8 @@ func (s *Statsd) parseStatsdLine(line string) error {
 	defer s.Unlock()
 
 	lineTags := make(map[string]string)
-	if s.ParseDataDogTags {
+	switch {
+	case s.ParseDataDogTags:
 		recombinedSegments := make([]string, 0)
 		// datadog tags look like this:
 		// users.online:1|c|@0.5|#country:china,environment:production
@@ -507,6 +516,43 @@ func (s *Statsd) parseStatsdLine(line string) error {
 			}
 		}
 		line = strings.Join(recombinedSegments, "|")
+
+	case s.ParseLibratoTags:
+		recombinedSegments := make([]string, 0)
+		// librato tags look like this:
+		// metric.name#tag1=value1,tag2=value2:metric_value|metric_type
+		// we will split on the pipe and hash and remove any elements that are librato
+		// tags, parse them, and rebuild the line sans the librato tags
+		hashsplit := strings.Split(line, "#")
+		colonsplit := strings.Split(hashsplit[0], ":")
+
+		if len(hashsplit) > 1 {
+			colonsplit = strings.Split(hashsplit[1], ":")
+
+			tags := strings.Split(colonsplit[0], ",")
+			for _, tag := range tags {
+				ts := strings.SplitN(tag, "=", 2)
+				var k, v string
+				switch len(ts) {
+				case 1:
+					// just a tag
+					k = ts[0]
+					v = ""
+				case 2:
+					k = ts[0]
+					v = ts[1]
+				}
+				if k != "" {
+					lineTags[k] = v
+				}
+			}
+		}
+
+		recombinedSegments = append(recombinedSegments, hashsplit[0])
+		if len(colonsplit) > 1 {
+			recombinedSegments = append(recombinedSegments, colonsplit[1])
+		}
+		line = strings.Join(recombinedSegments, ":")
 	}
 
 	// Validate splitting the line on ":"
